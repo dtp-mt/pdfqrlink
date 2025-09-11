@@ -23,7 +23,7 @@ jobs:
       - name: Build .app with PyInstaller
         run: |
           echo "from PyInstaller.utils.hooks import collect_data_files; datas=collect_data_files('tkinterdnd2')" > hook-tkinterdnd2.py
-          pyinstaller -y app.spec --collect-all tkinterdnd2
+          pyinstaller -y app.spec
 
       - name: Upload .app bundle
         uses: actions/upload-artifact@v4
