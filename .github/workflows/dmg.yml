@@ -1,0 +1,11 @@
+- name: Create .dmg from .app
+  run: |
+    brew install create-dmg
+    chmod +x create-dmg.sh
+    ./create-dmg.sh
+
+- name: Upload .dmg
+  uses: actions/upload-artifact@v4
+  with:
+    name: qr-pdf-annotator-dmg
+    path: QR PDF Annotator.dmg
