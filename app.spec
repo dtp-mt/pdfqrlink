@@ -1,5 +1,10 @@
-
 # -*- mode: python ; coding: utf-8 -*-
+
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+# tkinterdnd2 のリソース＆サブモジュールを収集
+_tkdnd_datas = collect_data_files('tkinterdnd2')
+_tkdnd_hidden = collect_submodules('tkinterdnd2')
 
 block_cipher = None
 
@@ -7,8 +12,8 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=_tkdnd_datas,           # ← 追加
+    hiddenimports=_tkdnd_hidden,  # ← 追加
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -17,14 +22,10 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz, a.scripts,
-    [],
+    pyz, a.scripts, [],
     exclude_binaries=True,
     name='QR PDF Annotator',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
+    debug=False, strip=False, upx=False,
     console=False,
 )
 coll = COLLECT(
