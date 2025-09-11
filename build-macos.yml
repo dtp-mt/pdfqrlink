@@ -1,0 +1,32 @@
+
+name: macOS ARM .app build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install pymupdf Pillow numpy opencv-python-headless zxing-cpp tkinterdnd2-universal pyinstaller
+
+      - name: Build .app with PyInstaller
+        run: |
+          echo "from PyInstaller.utils.hooks import collect_data_files; datas=collect_data_files('tkinterdnd2')" > hook-tkinterdnd2.py
+          pyinstaller -y app.spec --collect-all tkinterdnd2
+
+      - name: Upload .app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: qr-pdf-annotator-arm
+          path: dist/QR\ PDF\ Annotator.app
