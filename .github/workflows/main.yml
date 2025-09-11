@@ -1,0 +1,42 @@
+# .github/workflows/build-macos.yml
+name: macOS .app build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-13, macos-14]   # 13=Intel, 14=Apple Silicon
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements-mac.txt
+          # tkinterdnd2 を確実に収集（hookが無い環境対策）
+          echo "from PyInstaller.utils.hooks import collect_data_files; datas=collect_data_files('tkinterdnd2')" > hook-tkinterdnd2.py
+
+      - name: Build .app with PyInstaller (spec)
+        run: |
+          pyinstaller -y app.spec \
+            --collect-all tkinterdnd2  # 念のため
+          ls -la dist
+          du -sh dist/*
+
+      - name: Archive app
+        uses: actions/upload-artifact@v4
+        with:
+          name: qr-pdf-annotator-${{ matrix.os }}
+          path: dist/QR\ PDF\ Annotator.app
