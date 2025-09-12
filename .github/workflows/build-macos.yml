@@ -65,7 +65,7 @@ jobs:
           brew install create-dmg
           chmod +x create-dmg.sh
           DMG_NAME="${APP_PRODUCT}-${{ matrix.archTag }}.dmg"
-          ./create-dmg.sh "dist/${APP_BUNDLE}" "${DMG_NAME}" "${APP_PRODUCT} (${ { matrix.archTag } })"
+          ./create-dmg.sh "dist/${APP_BUNDLE}" "${APP_PRODUCT}-${{ matrix.archTag }}.dmg" "${APP_PRODUCT} (${{ matrix.archTag }})"
 
       - name: Upload .dmg
         uses: actions/upload-artifact@v4
