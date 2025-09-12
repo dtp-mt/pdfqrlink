@@ -8,21 +8,17 @@ import fitz  # PyMuPDF
 from PIL import Image
 import cv2
 import zxingcpp
-
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
-
 # ドラッグ＆ドロップ
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
-
-# ====== 検出ロジック ======
+# ====== QR検出ロジック ======
 def detect_and_decode_qr_zxing(pil_img: Image.Image) -> list:
     img_rgb = np.array(pil_img.convert("RGB"))
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     img_bgr = np.ascontiguousarray(img_bgr)
     barcodes = zxingcpp.read_barcodes(img_bgr)
-
     results = []
     for bc in barcodes:
         if bc.format != zxingcpp.BarcodeFormat.QRCode:
@@ -31,57 +27,323 @@ def detect_and_decode_qr_zxing(pil_img: Image.Image) -> list:
         if pos is None:
             continue
         pts = np.array([
-            (float(pos.top_left.x), float(pos.top_left.y)),
-            (float(pos.top_right.x), float(pos.top_right.y)),
+            (float(pos.top_left.x),     float(pos.top_left.y)),
+            (float(pos.top_right.x),    float(pos.top_right.y)),
             (float(pos.bottom_right.x), float(pos.bottom_right.y)),
-            (float(pos.bottom_left.x), float(pos.bottom_left.y)),
+            (float(pos.bottom_left.x),  float(pos.bottom_left.y)),
         ], dtype=np.float32)
         results.append({"text": getattr(bc, "text", ""), "points": pts})
     return results
 
 
-def export_annotated_pdf(input_bytes: bytes, detections_map: dict, zoom_map: dict, password: str | None = None) -> bytes:
+# ====== ユーティリティ ======
+def _square_rect_from_points(pts: np.ndarray, zoom: float, margin: float = 4.0) -> fitz.Rect:
+    """ZXingの4点から矩形を作り、中心を保ったまま正方形化して少しマージンを取る"""
+    xs = [x / zoom for x, _ in pts]
+    ys = [y / zoom for _, y in pts]
+    base = fitz.Rect(min(xs), min(ys), max(xs), max(ys))
+    w, h = base.width, base.height
+    size = max(w, h)
+    cx, cy = base.x0 + w / 2.0, base.y0 + h / 2.0
+    sq = fitz.Rect(cx - size / 2.0, cy - size / 2.0, cx + size / 2.0, cy + size / 2.0)
+    # 追加マージン
+    return fitz.Rect(sq.x0 - margin, sq.y0 - margin, sq.x1 + margin, sq.y1 + margin)
+
+
+def _safe_add_text_annot(page, point, contents, icon="Comment"):
+    """Text注釈（付箋）を新旧API名に対応して追加"""
+    try:
+        return page.add_text_annot(point, contents, icon=icon)  # 新
+    except AttributeError:
+        return page.addTextAnnot(point, contents, icon=icon)    # 旧
+
+
+def _safe_add_freetext_annot(page, rect, text, **kwargs):
+    """FreeText注釈（テキストボックス）を新旧API名に対応して追加"""
+    try:
+        return page.add_freetext_annot(rect, text, **kwargs)    # 新
+    except AttributeError:
+        return page.addFreetextAnnot(rect, text, **kwargs)      # 旧
+
+
+def _safe_insert_link(page, rect, uri):
+    """URIリンクを新旧API名に対応して追加"""
+    payload = {"kind": fitz.LINK_URI, "from": rect, "uri": uri}
+    try:
+        return page.insert_link(payload)  # 新
+    except AttributeError:
+        return page.insertLink(payload)   # 旧
+
+
+def _rect_valid(r: fitz.Rect) -> bool:
+    return (r is not None) and (r.width > 1.0) and (r.height > 1.0)
+
+# ====== ここから 追加のヘルパー ======
+
+def _text_width(text: str, fontname: str, fontsize: float) -> float:
+    """文字列の描画幅を取得（新旧APIを吸収）。失敗時は概算。"""
+    try:
+        return fitz.get_text_length(text, fontname=fontname, fontsize=fontsize)  # 新
+    except Exception:
+        try:
+            return fitz.getTextlength(text, fontname=fontname, fontsize=fontsize)  # 旧
+        except Exception:
+            return len(text) * fontsize * 0.6  # 概算
+
+def _append_summary_pages(doc: fitz.Document,
+                          entries: list[tuple[int, str]],
+                          title: str = "QR Decode Summary",
+                          fontname: str = "helv"):
+    """
+    通し番号とデコード結果の一覧ページを文末に追加。
+    - entries: [(#番号, テキスト), ...]
+    - 複数ページに自動改ページ
+    """
+    # ページサイズは先頭ページを踏襲、なければA4相当
+    if len(doc) > 0:
+        page_rect = doc[0].rect
+    else:
+        page_rect = fitz.Rect(0, 0, 595, 842)  # 約A4
+
+    margin = 36  # 0.5 inch
+    col_left = page_rect.x0 + margin
+    col_right = page_rect.x1 - margin
+    top = page_rect.y0 + margin
+    bottom = page_rect.y1 - margin
+
+    title_fs = 16
+    body_fs = 11
+    line_gap = body_fs * 1.35  # 行送りの目安
+
+    def new_page():
+        return doc.new_page(width=page_rect.width, height=page_rect.height)
+
+    def write_title(p: fitz.Page):
+        p.insert_text(
+            fitz.Point(col_left, top),
+            title,
+            fontsize=title_fs,
+            fontname=fontname,
+            color=(0, 0, 0)
+        )
+        # 罫線（任意）
+        p.draw_line(
+            fitz.Point(col_left, top + title_fs * 0.6),
+            fitz.Point(col_right, top + title_fs * 0.6),
+            color=(0, 0, 0),
+            width=0.7
+        )
+        return top + title_fs * 1.6  # 次のY
+
+    def wrap_to_width(text: str, max_width: float) -> list[str]:
+        """1行分を最大幅に収まるようラップ（URL等の無空白も対応）"""
+        if not text:
+            return [""]
+        lines = []
+        buf = ""
+        for ch in text:
+            if ch == "\n":
+                lines.append(buf)
+                buf = ""
+                continue
+            test = buf + ch
+            if _text_width(test, fontname, body_fs) <= max_width:
+                buf = test
+            else:
+                if buf == "":
+                    # 1文字でも溢れる場合は強制改行
+                    lines.append(ch)
+                    buf = ""
+                else:
+                    lines.append(buf)
+                    buf = ch
+        if buf:
+            lines.append(buf)
+        return lines
+
+    # ページ生成 & タイトル
+    page = new_page()
+    y = write_title(page)
+
+    # ヘッダ情報（任意表示）
+    info_line = f"Total: {len(entries)}"
+    page.insert_text(
+        fitz.Point(col_left, y),
+        info_line,
+        fontsize=body_fs,
+        fontname=fontname,
+        color=(0, 0, 0)
+    )
+    y += line_gap
+
+    # エントリを順に書く
+    max_width = col_right - col_left
+    for idx, txt in entries:
+        prefix = f"#{idx}: "
+        # プレフィックスと本体を一緒にラップ（1行目だけprefix付きで詰める）
+        first_line_budget = max_width - _text_width(prefix, fontname, body_fs)
+        wrapped = []
+        for i, seg in enumerate(txt.split("\n")):
+            seg_lines = wrap_to_width(seg, max_width if i else max(first_line_budget, 24))
+            if i == 0 and seg_lines:
+                # 先頭行にprefixを融合
+                head = seg_lines[0]
+                seg_lines[0] = prefix + head
+            else:
+                # 改行を挟んだ文はそのまま（prefixなし）
+                pass
+            wrapped.extend(seg_lines)
+        if not wrapped:
+            wrapped = [prefix]  # 空文字対策
+
+        for line in wrapped:
+            # 改ページ判定
+            if y + line_gap > bottom:
+                page = new_page()
+                y = write_title(page)
+            page.insert_text(
+                fitz.Point(col_left, y),
+                line,
+                fontsize=body_fs,
+                fontname=fontname,
+                color=(0, 0, 0)
+            )
+            y += line_gap
+
+# ====== 追加ヘルパー ここまで ======
+
+
+# ====== 注釈付きPDFを書き出す ======
+def export_annotated_pdf(input_bytes, detections_map, zoom_map, password=None):
+    """
+    - 検出枠：正方形＋半透明シアン塗り＋赤枠
+    - コメント（Text注釈）：枠の左上“外側”に付箋（本文 = [#n] デコード文字列）
+    - 通し番号（FreeText注釈）：枠の左下“内側”に、枠サイズの約1/4の正方形で #n を赤字表示（背景は白）
+    - URLはリンク化。ただし左下のラベル領域は避けるため、リンクを2分割（上帯＋右側）
+    - ★ 最終ページに「#n と デコード結果」の一覧を追加
+    """
     doc = fitz.open(stream=input_bytes, filetype="pdf")
-    if doc.needs_pass and password:
-        if not doc.authenticate(password):
-            doc.close()
-            raise RuntimeError("PDFパスワードが正しくありません。")
+    try:
+        if doc.needs_pass and password:
+            if not doc.authenticate(password):
+                raise RuntimeError("PDFパスワードが正しくありません。")
 
-    for pidx, dets in detections_map.items():
-        page = doc.load_page(pidx)
-        zoom = zoom_map.get(pidx, 3.0)
-        for det in dets:
-            pts = det["points"]
-            xs = [x / zoom for x, _ in pts]
-            ys = [y / zoom for _, y in pts]
-            rect = fitz.Rect(min(xs), min(ys), max(xs), max(ys))
+        global_idx = 1  # 文書全体の通し番号
+        summary_entries: list[tuple[int, str]] = []  # ★ 一覧ページ用に収集
 
-            margin = 4.0
-            rect = fitz.Rect(rect.x0 - margin, rect.y0 - margin, rect.x1 + margin, rect.y1 + margin)
+        # ページは昇順で処理
+        for pidx in sorted(detections_map.keys()):
+            page = doc.load_page(pidx)
+            zoom = zoom_map.get(pidx, 3.0)
+            dets = detections_map.get(pidx, [])
 
-            # 半透明シアンの塗り
-            fill_annot = page.add_rect_annot(rect)
-            fill_annot.set_border(width=0)
-            fill_annot.set_colors(stroke=None, fill=(0, 1, 1))
-            fill_annot.set_opacity(0.3)
-            fill_annot.update()
+            for det in dets:
+                pts = det["points"]
+                txt = (det.get("text") or "").strip()
 
-            # 赤枠
-            border_annot = page.add_rect_annot(rect)
-            border_annot.set_border(width=1.5)
-            border_annot.set_colors(stroke=(1, 0, 0), fill=None)
-            border_annot.set_opacity(1.0)
-            border_annot.update()
+                # === 正方形枠 ===
+                rect = _square_rect_from_points(pts, zoom, margin=4.0)
 
-            # URLはリンク化
-            txt = det["text"] or ""
-            if txt.startswith("http://") or txt.startswith("https://"):
-                page.insert_link({"kind": fitz.LINK_URI, "from": rect, "uri": txt})
+                # 半透明シアンの塗り
+                fill_annot = page.add_rect_annot(rect)
+                fill_annot.set_border(width=0)
+                fill_annot.set_colors(stroke=None, fill=(0, 1, 1))
+                fill_annot.set_opacity(0.30)
+                fill_annot.update()
 
-    out = io.BytesIO()
-    doc.save(out, deflate=True)
-    doc.close()
-    return out.getvalue()
+                # 赤枠
+                border_annot = page.add_rect_annot(rect)
+                border_annot.set_border(width=1.5)
+                border_annot.set_colors(stroke=(1, 0, 0), fill=None)
+                border_annot.set_opacity(1.0)
+                border_annot.update()
+
+                # ===== コメント（Text注釈）…枠の左上“外側” =====
+                ICON_EST = 20.0  # 付箋アイコンの概寸（ページ座標）
+                GAP      = 6.0
+                offset   = ICON_EST + GAP
+                bubble_pt = fitz.Point(rect.x0 - offset, rect.y0 - offset)
+
+                # ページ範囲にクランプ
+                pagebox = page.bound()
+                bx = min(max(bubble_pt.x, pagebox.x0 + 2), pagebox.x1 - 2)
+                by = min(max(bubble_pt.y, pagebox.y0 + 2), pagebox.y1 - 2)
+                bubble_pt = fitz.Point(bx, by)
+
+                contents_str = f"[#{global_idx}] {txt}"
+                text_annot = _safe_add_text_annot(page, bubble_pt, contents_str, icon="Comment")
+                try:
+                    text_annot.set_info({
+                        "content": contents_str,
+                        "title":   f"QR #{global_idx}",
+                        "subject": "QR decode",
+                    })
+                except Exception:
+                    pass
+                text_annot.set_colors(stroke=(1, 0, 0), fill=None)
+                text_annot.update()
+
+                # ===== 通し番号（FreeText注釈）…枠の左下“内側”（1/4サイズ・白背景） =====
+                unit = max(12.0, min(rect.width, rect.height) / 4.0)
+                margin = 2.0
+                label_rect = fitz.Rect(
+                    rect.x0 + margin,
+                    rect.y1 - margin - unit,
+                    rect.x0 + margin + unit,
+                    rect.y1 - margin
+                )
+                fontsize = max(8.0, min(13.0, unit * 0.55))
+                try:
+                    ft = _safe_add_freetext_annot(
+                        page, label_rect, f"#{global_idx}",
+                        fontsize=fontsize,
+                        fontname="helv",
+                        text_color=(1, 0, 0),
+                        fill_color=(1, 1, 1),      # ★ 白背景
+                        align=fitz.TEXT_ALIGN_LEFT,
+                        rotate=0,
+                    )
+                except TypeError:
+                    ft = _safe_add_freetext_annot(
+                        page, label_rect, f"#{global_idx}",
+                        fontsize=fontsize,
+                        text_color=(1, 0, 0),
+                    )
+                try:
+                    ft.set_border(width=0.8)
+                    if hasattr(ft, "set_opacity"):
+                        ft.set_opacity(0.90)
+                    ft.set_info({"title": f"QR #{global_idx}", "subject": "QR label"})
+                    ft.update()
+                except Exception:
+                    pass
+
+                # ===== URLリンク化（左下のラベル領域だけ避ける＝2分割） =====
+                is_url = txt.lower().startswith("http://") or txt.lower().startswith("https://")
+                if is_url:
+                    link_top   = fitz.Rect(rect.x0, rect.y0, rect.x1, label_rect.y0)
+                    link_right = fitz.Rect(label_rect.x1, label_rect.y0, rect.x1, rect.y1)
+                    for lr in (link_top, link_right):
+                        if _rect_valid(lr):
+                            _safe_insert_link(page, lr, txt)
+
+                # ★ 一覧ページ用に追記
+                summary_entries.append((global_idx, txt if txt else ""))
+
+                # 次のQRへ
+                global_idx += 1
+
+        # ===== ★ 文末にサマリーページを追加 =====
+        _append_summary_pages(doc, summary_entries, title="QR Decode Summary")
+
+        out = io.BytesIO()
+        doc.save(out, deflate=True)
+        return out.getvalue()
+
+    finally:
+        doc.close()
+
+
 
 
 def parse_pages(sel: str, total: int) -> list[int]:
@@ -128,7 +390,6 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
     # ===== UI =====
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
-
         frm = ttk.Frame(self)
         frm.pack(fill="x", **pad)
 
@@ -167,8 +428,8 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
         chk.pack(anchor="w", padx=12, pady=(0, 4))
 
         # 明確なドロップエリア
-        self.drop_box = ttk.Label(self, text="ここに PDF をドラッグ＆ドロップ 📄👇", anchor="center",
-                                  relief="groove", padding=18)
+        self.drop_box = ttk.Label(self, text="ここに PDF をドラッグ＆ドロップ 📄👇",
+                                  anchor="center", relief="groove", padding=18)
         self.drop_box.pack(fill="x", padx=10, pady=(0, 8))
         self.drop_box.drop_target_register(DND_FILES)
         self.drop_box.dnd_bind('<<Drop>>', self._on_drop)
@@ -194,7 +455,6 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
         self.progress.pack(fill="x", expand=True)
         self.status = ttk.Label(self, text="待機中")
         self.status.pack(anchor="w", padx=12)
-
         ttk.Label(self, text="ログ").pack(anchor="w", padx=12)
         self.log = tk.Text(self, height=12)
         self.log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -209,22 +469,16 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
             if not pdfs:
                 messagebox.showwarning("注意", "PDFファイルをドロップしてください。")
                 return
-
-            # 最初のPDFを採用
             picked = pdfs[0]
             self.pdf_path.set(picked)
             self.log_write(f"ドロップ: {picked}\n")
 
-            # 解析中なら自動開始はしない（完了後に手動で開始 or もう一度ドロップ）
             if self._worker and self._worker.is_alive():
                 self.log_write("現在解析中のため、自動開始はスキップしました。\n")
                 return
 
-            # 自動開始（有効時）
             if self.auto_run_on_drop.get():
-                # 少し遅延させてUI更新を反映
                 self.after(150, self.start_process)
-
         except Exception as e:
             messagebox.showerror("エラー", f"ドロップ処理に失敗しました: {e}")
 
@@ -249,13 +503,12 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
         # すでに実行中なら何もしない
         if self._worker and self._worker.is_alive():
             return
-
         path = self.pdf_path.get().strip()
         if not path or not os.path.exists(path):
             messagebox.showerror("エラー", "PDFファイルを選択してください。")
             return
 
-        # ★ 自動開始時でもパスワード事前確認（必要ならダイアログ）
+        # ★ パスワード事前確認（必要時）
         pwd = self.password.get().strip()
         try:
             test_doc = fitz.open(path)
@@ -263,8 +516,7 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
                 if test_doc.needs_pass and not pwd:
                     ask = simpledialog.askstring("パスワード",
                                                  "このPDFにはパスワードが必要です。入力してください：",
-                                                 show="*",
-                                                 parent=self)
+                                                 show="*", parent=self)
                     if not ask:
                         self.log_write("開始をキャンセルしました（パスワード未入力）。\n")
                         return
@@ -272,7 +524,6 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
             finally:
                 test_doc.close()
         except Exception:
-            # 壊れたPDFなど
             pass
 
         # UI 切り替え
@@ -284,7 +535,6 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
         self.status.config(text="解析準備中…")
         self.log_delete()
         self.log_write(f"入力PDF: {path}\n")
-
         self._worker = threading.Thread(target=self._process_worker, daemon=True)
         self._worker.start()
         self.after(200, self._poll_worker)
@@ -325,7 +575,6 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
                 target_pages = parse_pages(page_sel, total_pages)
                 if not target_pages:
                     raise RuntimeError("解析対象ページが空です。指定を見直してください。")
-
                 self.log_write(f"ページ数: {total_pages} / 解析対象: {', '.join(str(p+1) for p in target_pages)}\n")
 
                 detections_map: dict[int, list] = {}
@@ -336,16 +585,17 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
                         self.log_write("ユーザーにより停止されました。\n")
                         self.annotated_bytes = None
                         return
+
                     page = doc_in.load_page(pidx)
                     zoom_map[pidx] = zoom
                     mat = fitz.Matrix(zoom, zoom)
                     pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
-
                     pil_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
                     detections = detect_and_decode_qr_zxing(pil_img)
                     detections_map[pidx] = detections
-
                     self.log_write(f"Page {pidx+1}: QR {len(detections)}件\n")
+
                     self._set_progress(i / len(target_pages) * 100.0)
                     self._set_status(f"解析中… ({i}/{len(target_pages)})")
 
@@ -353,6 +603,7 @@ class QRPdfAnnotatorApp(TkinterDnD.Tk):
                     file_bytes = f.read()
                 self.annotated_bytes = export_annotated_pdf(file_bytes, detections_map, zoom_map, password=pwd)
                 self.log_write("注釈PDFの生成が完了しました。\n")
+
             finally:
                 doc_in.close()
 
