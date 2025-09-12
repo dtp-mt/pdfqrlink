@@ -1,11 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 APP_BUNDLE="${1:-dist/PDF内QRコードに注釈追加.app}"
 DMG_NAME="${2:-PDF内QRコードに注釈追加.dmg}"
-VOLNAME="${3:-PDF内QRコードに注釈追加}"   # Finder に表示されるボリューム名
+VOLNAME="${3:-PDF内QRコードに注釈追加}"
 
-# 存在チェック（分かりやすいエラーに）
 if [ ! -d "${APP_BUNDLE}" ]; then
   echo "ERROR: App bundle not found: ${APP_BUNDLE}" >&2
   ls -la dist || true
