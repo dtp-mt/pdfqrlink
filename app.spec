@@ -36,7 +36,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='QR PDF Annotator.app',
-    icon=None,
+    icon='a0zmx-dwaac.icns',
     bundle_identifier='jp.example.qr-pdf',
     info_plist={
         'CFBundleShortVersionString': '1.0.0',
