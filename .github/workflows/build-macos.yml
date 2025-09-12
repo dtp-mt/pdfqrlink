@@ -29,7 +29,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qr-pdf-annotator-arm
-          path: dist/QR\ PDF\ Annotator.app
+          path: 'dist/PDF内QRコードに注釈追加.app'
 
       - name: Create .dmg from .app
         run: |
@@ -41,4 +41,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qr-pdf-annotator-dmg
-          path: QR PDF Annotator.dmg
+          path: 'PDF内QRコードに注釈追加.dmg'
