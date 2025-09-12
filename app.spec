@@ -24,21 +24,22 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
-    name='QR PDF Annotator',
+    name='PDF内QRコードに注釈追加',
     debug=False, strip=False, upx=False,
     console=False,
 )
 coll = COLLECT(
     exe, a.binaries, a.datas,
     strip=False, upx=False, upx_exclude=[],
-    name='QR PDF Annotator'
+    name='PDF内QRコードに注釈追加'
 )
 app = BUNDLE(
     coll,
-    name='QR PDF Annotator.app',
+    name='PDF内QRコードに注釈追加.app',
     icon='a0zmx-dwaac.icns',
     bundle_identifier='jp.example.qr-pdf',
     info_plist={
+        'CFBundleName': 'PDF内QRコードに注釈追加',
         'CFBundleShortVersionString': '1.0.0',
         'CFBundleVersion': '1.0.0',
         'NSHighResolutionCapable': 'True',
