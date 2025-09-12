@@ -1,32 +1,16 @@
-name: macOS Universal (x86_64 & arm64) .app/.dmg build
+
+name: macOS ARM .app build
 
 on:
   workflow_dispatch:
 
-env:
-  APP_PRODUCT: 'PDF内QRコードに注釈追加'
-  APP_BUNDLE:  'PDF内QRコードに注釈追加.app'
-  SPEC_FILE:   'app.spec'
-
 jobs:
   build:
-    strategy:
-      matrix:
-        include:
-          # Apple Silicon ネイティブ（標準ランナー）
-          - os: macos-14
-            arch: arm64
-            archTag: ARM
-          # Intel ネイティブ（標準ランナー）
-          - os: macos-13
-            arch: x86_64
-            archTag: Intel
-    runs-on: ${{ matrix.os }}
-
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python (python.org build)
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -34,41 +18,27 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install -U pip
-          # OpenCV/PyMuPDF 等のC拡張を含むため wheel を使えるように
           pip install pymupdf Pillow numpy opencv-python-headless zxing-cpp tkinterdnd2-universal pyinstaller
-
-      - name: Sanity: show Python & arch
-        run: |
-          python -c "import platform,sys; print(platform.platform()); print('py:', sys.version); import struct; print('bits:', 8*struct.calcsize('P'))"
-          uname -a
-          sysctl -n machdep.cpu.brand_string || true
 
       - name: Build .app with PyInstaller
         run: |
-          # HTMLエスケープされないように '>' を使う（重要）
           echo "from PyInstaller.utils.hooks import collect_data_files; datas=collect_data_files('tkinterdnd2')" > hook-tkinterdnd2.py
-          pyinstaller -y "$SPEC_FILE"
-
-      - name: Show dist contents
-        run: |
-          ls -la dist || true
-          /usr/libexec/PlistBuddy -c "Print :CFBundleName" "dist/${APP_BUNDLE}/Contents/Info.plist" || true
+          pyinstaller -y app.spec
 
       - name: Upload .app bundle
         uses: actions/upload-artifact@v4
         with:
-          name: "qr-pdf-annotator-app-${{ matrix.archTag }}"
-          path: "dist/${{ env.APP_BUNDLE }}"
+          name: qr-pdf-annotator-arm
+          path: 'dist/PDF内QRコードに注釈追加.app'
 
       - name: Create .dmg from .app
         run: |
           brew install create-dmg
           chmod +x create-dmg.sh
-          DMG_NAME="${APP_PRODUCT}-${{ matrix.archTag }}.dmg"
-          ./create-dmg.sh "dist/${APP_BUNDLE}" "${APP_PRODUCT}-${{ matrix.archTag }}.dmg" "${APP_PRODUCT} (${{ matrix.archTag }})"
-
+          ./create-dmg.sh "dist/PDF内QRコードに注釈追加.app" "PDF内QRコードに注釈追加.dmg" "PDF内QRコードに注釈追加"
+      
       - name: Upload .dmg
         uses: actions/upload-artifact@v4
         with:
-          name: "qr-pdf-annotator-dmg-${{ matrix.archTag }}"
-          path: "${{ env.APP_PRODUCT }}-${{ matrix.archTag }}.dmg"
+          name: qr-pdf-annotator-dmg
+          path: 'PDF内QRコードに注釈追加.dmg'
