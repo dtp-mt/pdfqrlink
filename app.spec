@@ -1,46 +1,34 @@
-# -*- mode: python ; coding: utf-8 -*-
-
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
-
-# tkinterdnd2 のリソース＆サブモジュールを収集
-_tkdnd_datas = collect_data_files('tkinterdnd2')
-_tkdnd_hidden = collect_submodules('tkinterdnd2')
-
+# QRPdfAnnotator.spec
+# pyinstaller QRPdfAnnotator.spec でビルド
+from PyInstaller.utils.hooks import collect_all
+import sys
 block_cipher = None
+
+# tkinterdnd2 のデータ一式を収集
+datas, binaries, hiddenimports = collect_all('tkinterdnd2')
 
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
-    datas=_tkdnd_datas,           # ← 追加
-    hiddenimports=_tkdnd_hidden,  # ← 追加
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports + ['tkinter', 'cv2', 'fitz'],
     hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
     noarchive=False,
 )
-pyz = PYZ(a.pure)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
 exe = EXE(
-    pyz, a.scripts, [],
-    exclude_binaries=True,
-    name='QR PDF Annotator',
-    debug=False, strip=False, upx=False,
-    console=False,
+    pyz, a.scripts, a.binaries, a.zipfiles, a.datas,
+    name='QRPdfAnnotator',
+    console=False,  # windowed
+    # target_arch='universal2',  # ← 本当に狙うなら。依存がすべて universal2 必須。
 )
-coll = COLLECT(
-    exe, a.binaries, a.datas,
-    strip=False, upx=False, upx_exclude=[],
-    name='QR PDF Annotator'
-)
+
 app = BUNDLE(
-    coll,
-    name='QR PDF Annotator.app',
+    exe,
+    name='QRPdfAnnotator.app',
     icon=None,
-    bundle_identifier='jp.example.qr-pdf',
-    info_plist={
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1.0.0',
-        'NSHighResolutionCapable': 'True',
-    }
+    bundle_identifier='com.example.qrpdfannotator'
 )
