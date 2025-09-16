@@ -1,0 +1,9 @@
+# requirements.txt
+pillow>=10.2
+pymupdf>=1.26.1        # macOS (Intel/ARM) 向けの公式ホイールあり  [6](https://github.com/pymupdf/PyMuPDF/releases)
+opencv-python>=4.10    # たまに一部版で arm64 ホイールが欠ける事例あり。問題時は 4.10.0.82 や 4.11.0.86 へ固定推奨  [7](https://pypi.org/project/opencv-python/)[8](https://github.com/opencv/opencv-python/issues/1005)
+zxing-cpp>=2.3.0       # macOS arm64/x86_64 ホイール提供あり  [9](https://pypi.org/project/zxing-cpp/)[10](https://github.com/zxing-cpp/zxing-cpp/discussions/536)
+tkinterdnd2>=0.4.2
+numpy>=1.26
+pyinstaller>=6.7
+pyinstaller-hooks-contrib>=2024.8
