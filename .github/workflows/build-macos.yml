@@ -1,44 +1,65 @@
-
-name: macOS ARM .app build
+name: macOS ARM & Intel .app builds
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon (arm64)
+          - runner: macos-14
+            py_arch: arm64
+            target_arch: arm64
+            dmg_suffix: arm64
+          # Intel (x86_64)
+          - runner: macos-13  # macos-13終了後は macos-14-large などへ切替
+            py_arch: x64
+            target_arch: x86_64
+            dmg_suffix: x64
+    runs-on: ${{ matrix.runner }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python ${{ matrix.py_arch }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          python -m pip install -U pip
-          pip install pymupdf Pillow numpy opencv-python-headless zxing-cpp tkinterdnd2-universal pyinstaller
+          python -m pip install -U pip wheel
+          pip install \
+            pymupdf Pillow numpy opencv-python-headless zxing-cpp \
+            tkinterdnd2-universal pyinstaller
 
-      - name: Build .app with PyInstaller
+      - name: Build .app with PyInstaller (${{ matrix.target_arch }})
         run: |
           echo "from PyInstaller.utils.hooks import collect_data_files; datas=collect_data_files('tkinterdnd2')" > hook-tkinterdnd2.py
-          pyinstaller -y app.spec
+          # Python環境のアーキに合わせたthinバイナリを作る（--target-architectureを明示）
+          pyinstaller -y app.spec --target-architecture ${{ matrix.target_arch }}
 
-      - name: Upload .app bundle
+          # 念のためビルド物のアーキを確認（デバッグ用）
+          file "dist/QR PDF Annotator.app/Contents/MacOS/QR PDF Annotator" || true
+
+      - name: Upload .app bundle (${{ matrix.dmg_suffix }})
         uses: actions/upload-artifact@v4
         with:
-          name: qr-pdf-annotator-arm
+          name: qr-pdf-annotator-app-${{ matrix.dmg_suffix }}
           path: dist/QR\ PDF\ Annotator.app
 
-      - name: Create .dmg from .app
+      - name: Create .dmg from .app (${{ matrix.dmg_suffix }})
         run: |
           brew install create-dmg
           chmod +x create-dmg.sh
-          ./create-dmg.sh
-      
-      - name: Upload .dmg
+          # create-dmg.sh が固定名を出すなら、中で出力名を引数対応させるのが◎
+          ./create-dmg.sh "QR PDF Annotator-${{ matrix.dmg_suffix }}.dmg"
+
+      - name: Upload .dmg (${{ matrix.dmg_suffix }})
         uses: actions/upload-artifact@v4
         with:
-          name: qr-pdf-annotator-dmg
-          path: QR PDF Annotator.dmg
+          name: qr-pdf-annotator-dmg-${{ matrix.dmg_suffix }}
+          path: QR\ PDF\ Annotator-${{ matrix.dmg_suffix }}.dmg
