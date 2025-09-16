@@ -1,65 +1,66 @@
-name: macOS ARM & Intel .app builds
+name: macOS build (Intel & Apple Silicon)
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 jobs:
-  build:
+  build-macos:
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Apple Silicon (arm64)
-          - runner: macos-14
-            py_arch: arm64
-            target_arch: arm64
-            dmg_suffix: arm64
-          # Intel (x86_64)
-          - runner: macos-13  # macos-13終了後は macos-14-large などへ切替
-            py_arch: x64
-            target_arch: x86_64
-            dmg_suffix: x64
+          - runner: macos-14   # Apple Silicon (arm64)
+            arch: arm64
+          - runner: macos-13   # Intel (x86_64)
+            arch: x86_64
     runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python ${{ matrix.py_arch }}
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Show Python & arch
         run: |
-          python -m pip install -U pip wheel
-          pip install \
-            pymupdf Pillow numpy opencv-python-headless zxing-cpp \
-            tkinterdnd2-universal pyinstaller
+          python -V
+          python - << 'PY'
+          import platform, sys
+          print("machine:", platform.machine(), "processor:", platform.processor())
+          print("sys.maxsize (bits):", 64 if sys.maxsize>2**32 else 32)
+          PY
 
-      - name: Build .app with PyInstaller (${{ matrix.target_arch }})
+      - name: Install deps
         run: |
-          echo "from PyInstaller.utils.hooks import collect_data_files; datas=collect_data_files('tkinterdnd2')" > hook-tkinterdnd2.py
-          # Python環境のアーキに合わせたthinバイナリを作る（--target-architectureを明示）
-          pyinstaller -y app.spec --target-architecture ${{ matrix.target_arch }}
+          python -m pip install -U pip wheel setuptools
+          pip install -r requirements.txt
 
-          # 念のためビルド物のアーキを確認（デバッグ用）
-          file "dist/QR PDF Annotator.app/Contents/MacOS/QR PDF Annotator" || true
+      - name: Build .app with PyInstaller
+        run: |
+          pyinstaller app.py \
+            --name QRPdfAnnotator \
+            --windowed --onedir --noconfirm \
+            --hidden-import=tkinterdnd2 \
+            --collect-all=tkinterdnd2 \
+            --collect-submodules=tkinter \
+            --collect-submodules=cv2 \
+            --collect-submodules=fitz
+          # ad-hoc codesign（任意）
+          codesign --deep --force -s - "dist/QRPdfAnnotator.app" || true
 
-      - name: Upload .app bundle (${{ matrix.dmg_suffix }})
+      - name: Make DMG
+        run: |
+          hdiutil create -volname "QRPdfAnnotator" \
+            -srcfolder "dist/QRPdfAnnotator.app" \
+            -ov -format UDZO "QRPdfAnnotator-${{ matrix.arch }}.dmg"
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qr-pdf-annotator-app-${{ matrix.dmg_suffix }}
-          path: dist/QR\ PDF\ Annotator.app
-
-      - name: Create .dmg from .app (${{ matrix.dmg_suffix }})
-        run: |
-          brew install create-dmg
-          chmod +x create-dmg.sh
-          # create-dmg.sh が固定名を出すなら、中で出力名を引数対応させるのが◎
-          ./create-dmg.sh "QR PDF Annotator-${{ matrix.dmg_suffix }}.dmg"
-
-      - name: Upload .dmg (${{ matrix.dmg_suffix }})
-        uses: actions/upload-artifact@v4
-        with:
-          name: qr-pdf-annotator-dmg-${{ matrix.dmg_suffix }}
-          path: QR\ PDF\ Annotator-${{ matrix.dmg_suffix }}.dmg
+          name: QRPdfAnnotator-${{ matrix.arch }}
+          path: QRPdfAnnotator-${{ matrix.arch }}.dmg
